@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
-import random
+import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
@@ -27,6 +28,7 @@ body{background:#0f172a;color:white;font-family:Arial;padding:25px;}
 .sl{color:#ef4444;}
 .note{margin-top:15px;color:#cbd5e1;line-height:1.5;}
 .loader{display:none;margin-bottom:20px;color:#38bdf8;}
+.error{color:#f87171;margin:20px 0;}
 </style>
 </head>
 <body>
@@ -38,6 +40,7 @@ body{background:#0f172a;color:white;font-family:Arial;padding:25px;}
     <button onclick="loadData()" class="refresh-btn">Refresh</button>
 </div>
 <div class="loader" id="loader">Fetching latest recommendations...</div>
+<div id="error" class="error" style="display:none"></div>
 <div class="grid" id="grid"></div>
 <script>
 function createCard(item){
@@ -53,9 +56,21 @@ function createCard(item){
 }
 async function loadData(){
     document.getElementById('loader').style.display='block';
-    const response = await fetch('/api/recommendations');
-    const data = await response.json();
-    document.getElementById('grid').innerHTML = data.map(createCard).join('');
+    document.getElementById('error').style.display='none';
+    document.getElementById('grid').innerHTML='';
+    try {
+        const response = await fetch('/api/recommendations');
+        const data = await response.json();
+        if(data.error){
+            document.getElementById('error').innerText = data.error;
+            document.getElementById('error').style.display='block';
+        } else {
+            document.getElementById('grid').innerHTML = data.map(createCard).join('');
+        }
+    } catch(e) {
+        document.getElementById('error').innerText = 'Failed to load data. Please try again.';
+        document.getElementById('error').style.display='block';
+    }
     document.getElementById('loader').style.display='none';
 }
 loadData();
@@ -71,14 +86,45 @@ def home():
 
 @app.route('/api/recommendations')
 def recommendations():
-    stocks = [
-        {"stock":"Marico","signal":"BUY","entry":"841","target":"880","stoploss":"824","note":"Defensive FMCG momentum setup"},
-        {"stock":"Triveni Turbine","signal":"BUY","entry":"607","target":"642","stoploss":"590","note":"Strong continuation breakout"},
-        {"stock":"Arvind","signal":"BUY","entry":"451","target":"495","stoploss":"429","note":"Bullish textile setup"},
-        {"stock":"Info Edge","signal":"SELL","entry":"Weak","target":"Lower","stoploss":"Avoid Fresh Buy","note":"Brokerage bearish outlook"}
-    ]
-    random.shuffle(stocks)
-    return jsonify(stocks)
+    try:
+        url = "https://munafasutra.com/nse/BestIntradayTips"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        stocks = []
+        rows = soup.select("table tr")
+
+        for row in rows[1:21]:  # skip header, get up to 20 rows
+            cols = row.find_all("td")
+            if len(cols) >= 5:
+                name_tag = cols[0].find("a")
+                name = name_tag.text.strip() if name_tag else cols[0].text.strip()
+                # Clean name: remove NSE symbol part after " - "
+                if " - " in name:
+                    name = name.split(" - ")[0].strip()
+
+                signal = cols[1].text.strip().upper()
+                entry  = cols[2].text.strip()
+                target = cols[3].text.strip()
+                sl     = cols[5].text.strip() if len(cols) > 5 else cols[4].text.strip()
+
+                stocks.append({
+                    "stock": name,
+                    "signal": signal,
+                    "entry": entry,
+                    "target": target,
+                    "stoploss": sl,
+                    "note": "Live NSE Intraday Tip — MunafaSutra"
+                })
+
+        if not stocks:
+            return jsonify({"error": "No data scraped. Site may have changed structure."})
+
+        return jsonify(stocks)
+
+    except Exception as e:
+        return jsonify({"error": f"Scraping failed: {str(e)}"})
 
 
 if __name__ == '__main__':
